@@ -2,7 +2,7 @@
 
 pipeline {
 
-    agent none   // Agent נבחר דינמית
+    agent none   // בחירת agent דינמית לפי פרמטר
 
     parameters {
         choice(
@@ -25,6 +25,9 @@ pipeline {
 
     stages {
 
+        /* -------------------------
+           Select Agent Dynamically
+        -------------------------- */
         stage('Select Agent') {
             steps {
                 script {
@@ -33,11 +36,15 @@ pipeline {
                     } else {
                         env.AGENT_LABEL = 'jenkins-agent'
                     }
-                    echo "Selected agent label: ${env.AGENT_LABEL}"
+
+                    echo "🧭 Selected agent label: ${env.AGENT_LABEL}"
                 }
             }
         }
 
+        /* -------------------------
+           Checkout Source Code
+        -------------------------- */
         stage('Checkout') {
             agent { label "${env.AGENT_LABEL}" }
             steps {
@@ -45,11 +52,16 @@ pipeline {
             }
         }
 
+        /* -------------------------
+           Environment Validation
+        -------------------------- */
         stage('Prepare Environment') {
             agent { label "${env.AGENT_LABEL}" }
             steps {
                 sh '''
-                  echo "Running on agent: ${NODE_NAME}"
+                  echo "Running on node: ${NODE_NAME}"
+                  whoami
+                  hostname
                   git --version
                   docker --version || true
                   aws --version || true
@@ -59,11 +71,14 @@ pipeline {
             }
         }
 
+        /* -------------------------
+           Static Analysis & Tests
+        -------------------------- */
         stage('Static Analysis & Tests') {
-            agent { label "${env.AGENT_LABEL}" }
             parallel {
 
                 stage('Pylint') {
+                    agent { label "${env.AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports/pylint
@@ -73,6 +88,7 @@ pipeline {
                 }
 
                 stage('Unit Tests') {
+                    agent { label "${env.AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports
@@ -83,19 +99,26 @@ pipeline {
             }
         }
 
+        /* -------------------------
+           Deploy to Kubernetes
+        -------------------------- */
         stage('Deploy to Kubernetes') {
             when {
                 expression { params.AGENT_TYPE == 'kubernetes' }
             }
-            agent { label "${env.AGENT_LABEL}" }
+            agent { label 'jenkins-agent' }
             steps {
                 sh '''
+                  echo "🚀 Deploying to Kubernetes namespace: ${APP_NAMESPACE}"
                   kubectl apply -f infra/k8s/ -n ${APP_NAMESPACE}
                 '''
             }
         }
     }
 
+    /* -------------------------
+       Post Actions
+    -------------------------- */
     post {
         success {
             echo "✅ Pipeline finished successfully on ${env.AGENT_LABEL}"
@@ -106,6 +129,8 @@ pipeline {
         failure {
             echo "❌ Pipeline failed"
         }
+        always {
+            echo "🧹 Pipeline execution completed"
+        }
     }
 }
-
