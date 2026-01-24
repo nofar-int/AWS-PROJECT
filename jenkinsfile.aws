@@ -2,7 +2,7 @@
 
 pipeline {
 
-    agent none
+    agent none   // Agent נבחר דינמית
 
     parameters {
         choice(
@@ -33,6 +33,7 @@ pipeline {
                     } else {
                         env.AGENT_LABEL = 'jenkins-agent'
                     }
+                    echo "Selected agent label: ${env.AGENT_LABEL}"
                 }
             }
         }
@@ -59,10 +60,10 @@ pipeline {
         }
 
         stage('Static Analysis & Tests') {
+            agent { label "${env.AGENT_LABEL}" }
             parallel {
 
                 stage('Pylint') {
-                    agent { label "${env.AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports/pylint
@@ -72,7 +73,6 @@ pipeline {
                 }
 
                 stage('Unit Tests') {
-                    agent { label "${env.AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports
@@ -87,7 +87,7 @@ pipeline {
             when {
                 expression { params.AGENT_TYPE == 'kubernetes' }
             }
-            agent { label 'jenkins-agent' }
+            agent { label "${env.AGENT_LABEL}" }
             steps {
                 sh '''
                   kubectl apply -f infra/k8s/ -n ${APP_NAMESPACE}
@@ -108,3 +108,4 @@ pipeline {
         }
     }
 }
+
