@@ -10,10 +10,6 @@ pipeline {
         timestamps()
     }
 
-    environment {
-        APP_NAMESPACE = "demo-app"
-    }
-
     stages {
 
         stage('Checkout') {
@@ -70,22 +66,24 @@ pipeline {
     }
 
     post {
-
         always {
-            echo "📦 Archiving test reports"
+            node('ec2-agent') {
 
-            archiveArtifacts artifacts: 'reports/**', fingerprint: true
+                echo "📦 Archiving test reports"
 
-            publishHTML(target: [
-                reportDir: 'reports/pytest',
-                reportFiles: 'pytest_report.html',
-                reportName: 'Pytest HTML Report',
-                keepAll: true,
-                alwaysLinkToLastBuild: true,
-                allowMissing: true
-            ])
+                archiveArtifacts artifacts: 'reports/**', fingerprint: true
 
-            junit 'reports/pytest/junit.xml'
+                publishHTML(target: [
+                    reportDir: 'reports/pytest',
+                    reportFiles: 'pytest_report.html',
+                    reportName: 'Pytest HTML Report',
+                    keepAll: true,
+                    alwaysLinkToLastBuild: true,
+                    allowMissing: true
+                ])
+
+                junit 'reports/pytest/junit.xml'
+            }
         }
 
         success {
