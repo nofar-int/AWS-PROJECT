@@ -2,12 +2,19 @@
 
 pipeline {
 
-    agent { label 'ec2-agent' }
+    agent {
+        label 'ec2-agent'
+    }
 
     options {
         timeout(time: 25, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
+    }
+
+    environment {
+        APP_NAMESPACE = "demo-app"
+        PYTHON_BIN = "python3"
     }
 
     stages {
@@ -21,10 +28,16 @@ pipeline {
         stage('Prepare Environment') {
             steps {
                 sh '''
+                  echo "Running on:"
                   whoami
                   hostname
+
                   python3 --version
-                  git --version
+                  pip3 --version || true
+
+                  # install deps locally (no sudo)
+                  python3 -m pip install --user --upgrade pip
+                  python3 -m pip install --user pytest pytest-html pylint
                 '''
             }
         }
@@ -32,62 +45,70 @@ pipeline {
         stage('Static Analysis & Tests') {
             parallel {
 
-                /* ===============================
+                /* ======================
                    PYLINT
-                   =============================== */
+                   ====================== */
                 stage('PyLint') {
                     steps {
                         sh '''
-                          python3 -m pip install --user pylint || true
-
                           mkdir -p reports/pylint
 
                           python3 -m pylint auth-service/*.py backend/*.py \
                             --output-format=html \
                             > reports/pylint/pylint.html || true
+
+                          ls -l reports/pylint || true
                         '''
                     }
                     post {
                         always {
-                            publishHTML(target: [
-                                reportDir: 'reports/pylint',
-                                reportFiles: 'pylint.html',
-                                reportName: 'PyLint Report',
-                                keepAll: true,
-                                alwaysLinkToLastBuild: true
-                            ])
+                            publishHTML(
+                                target: [
+                                    reportDir: 'reports/pylint',
+                                    reportFiles: 'pylint.html',
+                                    reportName: 'PyLint Report',
+                                    allowMissing: true,
+                                    keepAll: true,
+                                    alwaysLinkToLastBuild: true
+                                ]
+                            )
                         }
                     }
                 }
 
-                /* ===============================
+                /* ======================
                    PYTEST
-                   =============================== */
+                   ====================== */
                 stage('PyTest') {
                     steps {
                         sh '''
-                          python3 -m pip install --user pytest pytest-html || true
-
                           mkdir -p reports/pytest
 
                           python3 -m pytest \
                             --junitxml=reports/pytest/junit.xml \
                             --html=reports/pytest/pytest_report.html \
                             --self-contained-html || true
+
+                          ls -l reports/pytest || true
                         '''
                     }
                     post {
                         always {
-                            junit allowEmptyResults: true,
-                                  testResults: 'reports/pytest/junit.xml'
+                            junit(
+                                testResults: 'reports/pytest/junit.xml',
+                                allowEmptyResults: true
+                            )
 
-                            publishHTML(target: [
-                                reportDir: 'reports/pytest',
-                                reportFiles: 'pytest_report.html',
-                                reportName: 'Pytest HTML Report',
-                                keepAll: true,
-                                alwaysLinkToLastBuild: true
-                            ])
+                            publishHTML(
+                                target: [
+                                    reportDir: 'reports/pytest',
+                                    reportFiles: 'pytest_report.html',
+                                    reportName: 'Pytest HTML Report',
+                                    allowMissing: true,
+                                    keepAll: true,
+                                    alwaysLinkToLastBuild: true
+                                ]
+                            )
                         }
                     }
                 }
@@ -98,6 +119,9 @@ pipeline {
     post {
         success {
             echo "✅ Pipeline finished successfully on EC2 agent"
+        }
+        unstable {
+            echo "⚠️ Pipeline finished with warnings"
         }
         failure {
             echo "❌ Pipeline failed"
