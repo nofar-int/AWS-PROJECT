@@ -2,101 +2,109 @@
 
 pipeline {
 
-    agent none
+    /* =========================================
+       GLOBAL AGENT
+       ========================================= */
+    agent { label 'ec2-agent' }
 
+    /* =========================================
+       OPTIONS
+       ========================================= */
     options {
         timeout(time: 25, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
     }
 
+    /* =========================================
+       ENV
+       ========================================= */
+    environment {
+        APP_NAMESPACE = "demo-app"
+    }
+
     stages {
 
+        /* =========================================
+           CHECKOUT
+           ========================================= */
         stage('Checkout') {
-            agent { label 'ec2-agent' }
             steps {
                 checkout scm
             }
         }
 
+        /* =========================================
+           ENV VALIDATION
+           ========================================= */
         stage('Prepare Environment') {
-            agent { label 'ec2-agent' }
             steps {
                 sh '''
-                  echo "Running on node: $NODE_NAME"
+                  echo "Node: $(hostname)"
                   whoami
-                  hostname
                   git --version
                   python --version || true
-                  pip --version || true
+                  java -version
                 '''
             }
         }
 
-        stage('Static Analysis & Tests') {
-
+        /* =========================================
+           TESTS (PARALLEL + REPORTS)
+           ========================================= */
+        stage('Tests') {
             parallel {
 
-                stage('Pylint') {
-                    agent { label 'ec2-agent' }
+                stage('PyLint') {
                     steps {
                         sh '''
                           mkdir -p reports/pylint
-                          pylint auth-service/*.py backend/*.py \
-                            --output-format=text \
-                            > reports/pylint/pylint.txt || true
+                          pylint auth-service/*.py backend/*.py || true
                         '''
                     }
                 }
 
-                stage('Pytest') {
-                    agent { label 'ec2-agent' }
+                stage('PyTest') {
                     steps {
                         sh '''
-                          mkdir -p reports/pytest
+                          mkdir -p reports
+
                           pytest \
-                            --junitxml=reports/pytest/junit.xml \
-                            --html=reports/pytest/pytest_report.html \
+                            --junitxml=reports/junit.xml \
+                            --html=reports/pytest_report.html \
                             --self-contained-html || true
                         '''
+                    }
+                    post {
+                        always {
+                            /* ===== JUNIT ===== */
+                            junit allowEmptyResults: true,
+                                  testResults: 'reports/junit.xml'
+
+                            /* ===== HTML ===== */
+                            publishHTML(target: [
+                                reportDir: 'reports',
+                                reportFiles: 'pytest_report.html',
+                                reportName: 'Pytest HTML Report',
+                                keepAll: true,
+                                alwaysLinkToLastBuild: true
+                            ])
+                        }
                     }
                 }
             }
         }
     }
 
+    /* =========================================
+       POST
+       ========================================= */
     post {
-        always {
-            node('ec2-agent') {
-
-                echo "📦 Archiving test reports"
-
-                archiveArtifacts artifacts: 'reports/**', fingerprint: true
-
-                publishHTML(target: [
-                    reportDir: 'reports/pytest',
-                    reportFiles: 'pytest_report.html',
-                    reportName: 'Pytest HTML Report',
-                    keepAll: true,
-                    alwaysLinkToLastBuild: true,
-                    allowMissing: true
-                ])
-
-                junit 'reports/pytest/junit.xml'
-            }
-        }
-
         success {
-            echo "✅ Pipeline finished successfully"
+            echo "✅ Pipeline finished successfully on EC2 agent"
         }
-
-        unstable {
-            echo "⚠️ Pipeline finished with warnings"
-        }
-
         failure {
             echo "❌ Pipeline failed"
         }
     }
 }
-
