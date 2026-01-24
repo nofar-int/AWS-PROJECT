@@ -4,51 +4,101 @@ pipeline {
 
     agent none
 
-    parameters {
-        choice(
-            name: 'AGENT_TYPE',
-            choices: ['ec2'],
-            description: 'EC2 agent (Kubernetes will be added later)'
-        )
-    }
-
     options {
         timeout(time: 25, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
+    }
+
+    environment {
+        APP_NAMESPACE = "demo-app"
     }
 
     stages {
 
-        stage('Select Agent') {
-            steps {
-                script {
-                    env.AGENT_LABEL = 'ec2-agent'
-                }
-            }
-        }
-
         stage('Checkout') {
-            agent { label "${AGENT_LABEL}" }
+            agent { label 'ec2-agent' }
             steps {
                 checkout scm
             }
         }
 
-        stage('Build & Test') {
-            agent { label "${AGENT_LABEL}" }
+        stage('Prepare Environment') {
+            agent { label 'ec2-agent' }
             steps {
                 sh '''
-                  echo "Running on EC2 agent"
+                  echo "Running on node: $NODE_NAME"
+                  whoami
+                  hostname
                   git --version
                   python --version || true
+                  pip --version || true
                 '''
+            }
+        }
+
+        stage('Static Analysis & Tests') {
+
+            parallel {
+
+                stage('Pylint') {
+                    agent { label 'ec2-agent' }
+                    steps {
+                        sh '''
+                          mkdir -p reports/pylint
+                          pylint auth-service/*.py backend/*.py \
+                            --output-format=text \
+                            > reports/pylint/pylint.txt || true
+                        '''
+                    }
+                }
+
+                stage('Pytest') {
+                    agent { label 'ec2-agent' }
+                    steps {
+                        sh '''
+                          mkdir -p reports/pytest
+                          pytest \
+                            --junitxml=reports/pytest/junit.xml \
+                            --html=reports/pytest/pytest_report.html \
+                            --self-contained-html || true
+                        '''
+                    }
+                }
             }
         }
     }
 
     post {
+
+        always {
+            echo "📦 Archiving test reports"
+
+            archiveArtifacts artifacts: 'reports/**', fingerprint: true
+
+            publishHTML(target: [
+                reportDir: 'reports/pytest',
+                reportFiles: 'pytest_report.html',
+                reportName: 'Pytest HTML Report',
+                keepAll: true,
+                alwaysLinkToLastBuild: true,
+                allowMissing: true
+            ])
+
+            junit 'reports/pytest/junit.xml'
+        }
+
         success {
-            echo "✅ Pipeline finished successfully on EC2 agent"
+            echo "✅ Pipeline finished successfully"
+        }
+
+        unstable {
+            echo "⚠️ Pipeline finished with warnings"
+        }
+
+        failure {
+            echo "❌ Pipeline failed"
         }
     }
 }
+
