@@ -2,7 +2,7 @@
 
 pipeline {
 
-    agent none   // בחירה דינמית של agent
+    agent none
 
     parameters {
         choice(
@@ -52,10 +52,10 @@ pipeline {
         }
 
         stage('Static Analysis & Tests') {
-            agent { label "${AGENT_LABEL}" }
             parallel {
 
                 stage('Pylint') {
+                    agent { label "${AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports/pylint
@@ -65,6 +65,7 @@ pipeline {
                 }
 
                 stage('Unit Tests') {
+                    agent { label "${AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports
@@ -88,4 +89,5 @@ pipeline {
         }
     }
 }
+
 
