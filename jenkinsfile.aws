@@ -2,88 +2,83 @@
 
 pipeline {
 
-    /* =========================================
-       GLOBAL AGENT
-       ========================================= */
     agent { label 'ec2-agent' }
 
-    /* =========================================
-       OPTIONS
-       ========================================= */
     options {
         timeout(time: 25, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
     }
 
-    /* =========================================
-       ENV
-       ========================================= */
-    environment {
-        APP_NAMESPACE = "demo-app"
-    }
-
     stages {
 
-        /* =========================================
-           CHECKOUT
-           ========================================= */
         stage('Checkout') {
             steps {
                 checkout scm
             }
         }
 
-        /* =========================================
-           ENV VALIDATION
-           ========================================= */
         stage('Prepare Environment') {
             steps {
                 sh '''
-                  echo "Node: $(hostname)"
                   whoami
+                  hostname
+                  python --version
                   git --version
-                  python --version || true
-                  java -version
                 '''
             }
         }
 
-        /* =========================================
-           TESTS (PARALLEL + REPORTS)
-           ========================================= */
-        stage('Tests') {
+        stage('Static Analysis & Tests') {
             parallel {
 
+                /* ===============================
+                   PYLINT
+                   =============================== */
                 stage('PyLint') {
                     steps {
                         sh '''
                           mkdir -p reports/pylint
-                          pylint auth-service/*.py backend/*.py || true
+
+                          pylint auth-service/*.py backend/*.py \
+                            --output-format=html \
+                            > reports/pylint/pylint.html || true
                         '''
+                    }
+                    post {
+                        always {
+                            publishHTML(target: [
+                                reportDir: 'reports/pylint',
+                                reportFiles: 'pylint.html',
+                                reportName: 'PyLint Report',
+                                keepAll: true,
+                                alwaysLinkToLastBuild: true
+                            ])
+                        }
                     }
                 }
 
+                /* ===============================
+                   PYTEST
+                   =============================== */
                 stage('PyTest') {
                     steps {
                         sh '''
-                          mkdir -p reports
+                          mkdir -p reports/pytest
 
                           pytest \
-                            --junitxml=reports/junit.xml \
-                            --html=reports/pytest_report.html \
+                            --junitxml=reports/pytest/junit.xml \
+                            --html=reports/pytest/pytest_report.html \
                             --self-contained-html || true
                         '''
                     }
                     post {
                         always {
-                            /* ===== JUNIT ===== */
                             junit allowEmptyResults: true,
-                                  testResults: 'reports/junit.xml'
+                                  testResults: 'reports/pytest/junit.xml'
 
-                            /* ===== HTML ===== */
                             publishHTML(target: [
-                                reportDir: 'reports',
+                                reportDir: 'reports/pytest',
                                 reportFiles: 'pytest_report.html',
                                 reportName: 'Pytest HTML Report',
                                 keepAll: true,
@@ -96,12 +91,9 @@ pipeline {
         }
     }
 
-    /* =========================================
-       POST
-       ========================================= */
     post {
         success {
-            echo "✅ Pipeline finished successfully on EC2 agent"
+            echo "✅ Pipeline finished successfully"
         }
         failure {
             echo "❌ Pipeline failed"
