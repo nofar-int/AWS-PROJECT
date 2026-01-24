@@ -1,0 +1,110 @@
+@Library('jenkins-shared-library') _
+
+pipeline {
+
+    agent none
+
+    parameters {
+        choice(
+            name: 'AGENT_TYPE',
+            choices: ['ec2', 'kubernetes'],
+            description: 'Select where the pipeline should run'
+        )
+    }
+
+    options {
+        timeout(time: 25, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
+    }
+
+    environment {
+        SNYK_TOKEN    = credentials('SNYK_TOKEN')
+        APP_NAMESPACE = "demo-app"
+    }
+
+    stages {
+
+        stage('Select Agent') {
+            steps {
+                script {
+                    if (params.AGENT_TYPE == 'ec2') {
+                        env.AGENT_LABEL = 'ec2-agent'
+                    } else {
+                        env.AGENT_LABEL = 'jenkins-agent'
+                    }
+                }
+            }
+        }
+
+        stage('Checkout') {
+            agent { label "${env.AGENT_LABEL}" }
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Prepare Environment') {
+            agent { label "${env.AGENT_LABEL}" }
+            steps {
+                sh '''
+                  echo "Running on agent: ${NODE_NAME}"
+                  git --version
+                  docker --version || true
+                  aws --version || true
+                  kubectl version --client || true
+                  java -version
+                '''
+            }
+        }
+
+        stage('Static Analysis & Tests') {
+            parallel {
+
+                stage('Pylint') {
+                    agent { label "${env.AGENT_LABEL}" }
+                    steps {
+                        sh '''
+                          mkdir -p reports/pylint
+                          pylint auth-service/*.py backend/*.py || true
+                        '''
+                    }
+                }
+
+                stage('Unit Tests') {
+                    agent { label "${env.AGENT_LABEL}" }
+                    steps {
+                        sh '''
+                          mkdir -p reports
+                          pytest --html=reports/unit_test_report.html --self-contained-html || true
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            when {
+                expression { params.AGENT_TYPE == 'kubernetes' }
+            }
+            agent { label 'jenkins-agent' }
+            steps {
+                sh '''
+                  kubectl apply -f infra/k8s/ -n ${APP_NAMESPACE}
+                '''
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "✅ Pipeline finished successfully on ${env.AGENT_LABEL}"
+        }
+        unstable {
+            echo "⚠️ Pipeline completed with warnings"
+        }
+        failure {
+            echo "❌ Pipeline failed"
+        }
+    }
+}
