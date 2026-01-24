@@ -2,12 +2,12 @@
 
 pipeline {
 
-    agent none
+    agent none   // חשוב – בחירת agent דינמית
 
     parameters {
         choice(
             name: 'AGENT_TYPE',
-            choices: ['ec2'],
+            choices: ['ec2', 'kubernetes'],
             description: 'Select where the pipeline should run'
         )
     }
@@ -21,11 +21,28 @@ pipeline {
     environment {
         SNYK_TOKEN    = credentials('SNYK_TOKEN')
         APP_NAMESPACE = "demo-app"
-        AGENT_LABEL   = "ec2-agent"
     }
 
     stages {
 
+        /* =========================
+           Select Agent
+        ========================== */
+        stage('Select Agent') {
+            steps {
+                script {
+                    if (params.AGENT_TYPE == 'ec2') {
+                        env.AGENT_LABEL = 'ec2-agent'
+                    } else {
+                        env.AGENT_LABEL = 'jenkins-agent'
+                    }
+                }
+            }
+        }
+
+        /* =========================
+           Checkout
+        ========================== */
         stage('Checkout') {
             agent { label "${AGENT_LABEL}" }
             steps {
@@ -33,16 +50,17 @@ pipeline {
             }
         }
 
+        /* =========================
+           Prepare Environment
+        ========================== */
         stage('Prepare Environment') {
             agent { label "${AGENT_LABEL}" }
             steps {
                 sh '''
-                  echo "🖥 Running on node: ${NODE_NAME}"
-                  whoami
-                  hostname
-
-                  echo "🔧 Tool versions:"
+                  echo "Running on node: ${NODE_NAME}"
                   git --version
+                  python --version || true
+                  pip --version || true
                   docker --version || true
                   aws --version || true
                   kubectl version --client || true
@@ -51,6 +69,10 @@ pipeline {
             }
         }
 
+        /* =========================
+           Static Analysis & Tests
+           (NO agent here – required!)
+        ========================== */
         stage('Static Analysis & Tests') {
             parallel {
 
@@ -59,7 +81,9 @@ pipeline {
                     steps {
                         sh '''
                           mkdir -p reports/pylint
-                          pylint auth-service/*.py backend/*.py || true
+                          pylint auth-service/*.py backend/*.py \
+                            --output-format=text \
+                            > reports/pylint/pylint-report.txt || true
                         '''
                     }
                 }
@@ -69,25 +93,59 @@ pipeline {
                     steps {
                         sh '''
                           mkdir -p reports
-                          pytest --html=reports/unit_test_report.html --self-contained-html || true
+                          pytest \
+                            --html=reports/unit_test_report.html \
+                            --self-contained-html || true
                         '''
                     }
                 }
             }
         }
+
+        /* =========================
+           Deploy to Kubernetes
+           (רק אם נבחר kubernetes)
+        ========================== */
+        stage('Deploy to Kubernetes') {
+            when {
+                expression { params.AGENT_TYPE == 'kubernetes' }
+            }
+            agent { label 'jenkins-agent' }
+            steps {
+                sh '''
+                  kubectl apply -f infra/k8s/ -n ${APP_NAMESPACE}
+                '''
+            }
+        }
     }
 
+    /* =========================
+       Post Actions – קריטי!
+    ========================== */
     post {
-        success {
-            echo "✅ Pipeline finished successfully on EC2 agent"
+        always {
+            echo "📦 Archiving reports..."
+            archiveArtifacts artifacts: 'reports/**', fingerprint: true
+
+            publishHTML(target: [
+                reportDir: 'reports',
+                reportFiles: 'unit_test_report.html',
+                reportName: 'Pytest Report',
+                keepAll: true,
+                alwaysLinkToLastBuild: true
+            ])
         }
+
+        success {
+            echo "✅ Pipeline finished successfully on ${env.AGENT_LABEL}"
+        }
+
         unstable {
             echo "⚠️ Pipeline completed with warnings"
         }
+
         failure {
             echo "❌ Pipeline failed"
         }
     }
 }
-
-
