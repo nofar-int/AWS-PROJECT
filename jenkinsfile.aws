@@ -23,7 +23,7 @@ pipeline {
                 sh '''
                   whoami
                   hostname
-                  python --version
+                  python3 --version
                   git --version
                 '''
             }
@@ -38,9 +38,11 @@ pipeline {
                 stage('PyLint') {
                     steps {
                         sh '''
+                          python3 -m pip install --user pylint || true
+
                           mkdir -p reports/pylint
 
-                          pylint auth-service/*.py backend/*.py \
+                          python3 -m pylint auth-service/*.py backend/*.py \
                             --output-format=html \
                             > reports/pylint/pylint.html || true
                         '''
@@ -64,9 +66,11 @@ pipeline {
                 stage('PyTest') {
                     steps {
                         sh '''
+                          python3 -m pip install --user pytest pytest-html || true
+
                           mkdir -p reports/pytest
 
-                          pytest \
+                          python3 -m pytest \
                             --junitxml=reports/pytest/junit.xml \
                             --html=reports/pytest/pytest_report.html \
                             --self-contained-html || true
@@ -93,7 +97,7 @@ pipeline {
 
     post {
         success {
-            echo "✅ Pipeline finished successfully"
+            echo "✅ Pipeline finished successfully on EC2 agent"
         }
         failure {
             echo "❌ Pipeline failed"
