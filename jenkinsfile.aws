@@ -2,12 +2,12 @@
 
 pipeline {
 
-    agent none   // בחירת agent דינמית לפי פרמטר
+    agent none   // בחירה דינמית של agent
 
     parameters {
         choice(
             name: 'AGENT_TYPE',
-            choices: ['ec2', 'kubernetes'],
+            choices: ['ec2'],
             description: 'Select where the pipeline should run'
         )
     }
@@ -21,47 +21,27 @@ pipeline {
     environment {
         SNYK_TOKEN    = credentials('SNYK_TOKEN')
         APP_NAMESPACE = "demo-app"
+        AGENT_LABEL   = "ec2-agent"
     }
 
     stages {
 
-        /* -------------------------
-           Select Agent Dynamically
-        -------------------------- */
-        stage('Select Agent') {
-            steps {
-                script {
-                    if (params.AGENT_TYPE == 'ec2') {
-                        env.AGENT_LABEL = 'ec2-agent'
-                    } else {
-                        env.AGENT_LABEL = 'jenkins-agent'
-                    }
-
-                    echo "🧭 Selected agent label: ${env.AGENT_LABEL}"
-                }
-            }
-        }
-
-        /* -------------------------
-           Checkout Source Code
-        -------------------------- */
         stage('Checkout') {
-            agent { label "${env.AGENT_LABEL}" }
+            agent { label "${AGENT_LABEL}" }
             steps {
                 checkout scm
             }
         }
 
-        /* -------------------------
-           Environment Validation
-        -------------------------- */
         stage('Prepare Environment') {
-            agent { label "${env.AGENT_LABEL}" }
+            agent { label "${AGENT_LABEL}" }
             steps {
                 sh '''
-                  echo "Running on node: ${NODE_NAME}"
+                  echo "🖥 Running on node: ${NODE_NAME}"
                   whoami
                   hostname
+
+                  echo "🔧 Tool versions:"
                   git --version
                   docker --version || true
                   aws --version || true
@@ -71,14 +51,11 @@ pipeline {
             }
         }
 
-        /* -------------------------
-           Static Analysis & Tests
-        -------------------------- */
         stage('Static Analysis & Tests') {
+            agent { label "${AGENT_LABEL}" }
             parallel {
 
                 stage('Pylint') {
-                    agent { label "${env.AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports/pylint
@@ -88,7 +65,6 @@ pipeline {
                 }
 
                 stage('Unit Tests') {
-                    agent { label "${env.AGENT_LABEL}" }
                     steps {
                         sh '''
                           mkdir -p reports
@@ -98,30 +74,11 @@ pipeline {
                 }
             }
         }
-
-        /* -------------------------
-           Deploy to Kubernetes
-        -------------------------- */
-        stage('Deploy to Kubernetes') {
-            when {
-                expression { params.AGENT_TYPE == 'kubernetes' }
-            }
-            agent { label 'jenkins-agent' }
-            steps {
-                sh '''
-                  echo "🚀 Deploying to Kubernetes namespace: ${APP_NAMESPACE}"
-                  kubectl apply -f infra/k8s/ -n ${APP_NAMESPACE}
-                '''
-            }
-        }
     }
 
-    /* -------------------------
-       Post Actions
-    -------------------------- */
     post {
         success {
-            echo "✅ Pipeline finished successfully on ${env.AGENT_LABEL}"
+            echo "✅ Pipeline finished successfully on EC2 agent"
         }
         unstable {
             echo "⚠️ Pipeline completed with warnings"
@@ -129,8 +86,6 @@ pipeline {
         failure {
             echo "❌ Pipeline failed"
         }
-        always {
-            echo "🧹 Pipeline execution completed"
-        }
     }
 }
+
