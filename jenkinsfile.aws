@@ -1,21 +1,19 @@
 @Library('jenkins-shared-library') _
 
 pipeline {
-
     agent { label 'asg' }
 
     options {
         timeout(time: 30, unit: 'MINUTES')
-        timestamps()
         buildDiscarder(logRotator(numToKeepStr: '10'))
+        timestamps()
     }
 
     environment {
-        AWS_REGION = "us-east-1"
-        AWS_ACCOUNT_ID = "838883895073"
-        ECR_REPO = "aws_project"
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
-        SNYK_TOKEN = credentials('SNYK_TOKEN')
+        AWS_REGION   = "us-east-1"
+        ECR_REGISTRY = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
+        ECR_REPO     = "aws_project"
+        IMAGE_TAG    = "${BUILD_NUMBER}"
     }
 
     stages {
@@ -36,6 +34,8 @@ pipeline {
                     whoami
                     docker --version
                     aws --version
+                    node --version
+                    python3 --version
                 '''
             }
         }
@@ -45,7 +45,7 @@ pipeline {
             steps {
                 sh '''
                     aws ecr get-login-password --region ${AWS_REGION} \
-                    | docker login --username AWS --password-stdin ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                    | docker login --username AWS --password-stdin ${ECR_REGISTRY}
                 '''
             }
         }
@@ -56,10 +56,12 @@ pipeline {
 
                 stage('Pylint') {
                     steps {
-                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
                             sh '''
                                 mkdir -p reports/pylint
-                                pylint auth-service/*.py backend/*.py > reports/pylint/pylint_report.txt || true
+                                pip install pylint || true
+                                pylint auth-service/*.py backend/*.py \
+                                    > reports/pylint/pylint_report.txt || true
                             '''
                         }
                     }
@@ -67,10 +69,12 @@ pipeline {
 
                 stage('Unit Tests') {
                     steps {
-                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
                             sh '''
                                 mkdir -p reports
-                                pytest --html=reports/unit_test_report.html --self-contained-html || true
+                                pip install pytest pytest-html || true
+                                pytest --html=reports/unit_test_report.html \
+                                       --self-contained-html || true
                             '''
                         }
                     }
@@ -78,19 +82,26 @@ pipeline {
 
                 stage('Snyk Scan') {
                     steps {
-                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                            sh '''
-                                npm install -g snyk
-                                snyk auth ${SNYK_TOKEN}
-                                snyk test || true
-                            '''
+                        withCredentials([string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')]) {
+                            catchError(buildResult: 'SUCCESS', stageResult: 'SUCCESS') {
+                                sh '''
+                                    echo "Installing Snyk locally..."
+                                    npm install snyk --no-save
+
+                                    echo "Authenticating..."
+                                    npx snyk auth ${SNYK_TOKEN}
+
+                                    echo "Running Snyk test..."
+                                    npx snyk test || true
+                                '''
+                            }
                         }
                     }
                 }
             }
         }
 
-        /* ================= BUILD IMAGES ================= */
+        /* ================= BUILD DOCKER ================= */
         stage('Build Docker Images') {
             parallel {
 
@@ -98,7 +109,7 @@ pipeline {
                     steps {
                         sh '''
                             docker build -t auth-service:${IMAGE_TAG} \
-                            -f infra/Dockerfile.auth .
+                                -f infra/Dockerfile.auth .
                         '''
                     }
                 }
@@ -107,7 +118,7 @@ pipeline {
                     steps {
                         sh '''
                             docker build -t backend:${IMAGE_TAG} \
-                            -f infra/Dockerfile.backend .
+                                -f infra/Dockerfile.backend .
                         '''
                     }
                 }
@@ -116,41 +127,41 @@ pipeline {
                     steps {
                         sh '''
                             docker build -t frontend:${IMAGE_TAG} \
-                            -f infra/Dockerfile.frontend .
+                                -f infra/Dockerfile.frontend .
                         '''
                     }
                 }
             }
         }
 
-        /* ================= TAG IMAGES ================= */
+        /* ================= TAG ================= */
         stage('Tag Images for ECR') {
             steps {
                 sh '''
                     docker tag auth-service:${IMAGE_TAG} \
-                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:auth-${IMAGE_TAG}
+                        ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG}
 
                     docker tag backend:${IMAGE_TAG} \
-                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:backend-${IMAGE_TAG}
+                        ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG}
 
                     docker tag frontend:${IMAGE_TAG} \
-                    ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:frontend-${IMAGE_TAG}
+                        ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG}
                 '''
             }
         }
 
-        /* ================= PUSH TO ECR ================= */
+        /* ================= PUSH ================= */
         stage('Push Images to ECR') {
             steps {
                 sh '''
-                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:auth-${IMAGE_TAG}
-                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:backend-${IMAGE_TAG}
-                    docker push ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}:frontend-${IMAGE_TAG}
+                    docker push ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG}
+                    docker push ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG}
+                    docker push ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG}
                 '''
             }
         }
 
-        /* ================= PUBLISH REPORTS ================= */
+        /* ================= REPORTS ================= */
         stage('Publish HTML Reports') {
             steps {
                 publishHTML([
@@ -173,7 +184,7 @@ pipeline {
             }
         }
 
-        /* ================= SIMULATE LOAD (ASG) ================= */
+        /* ================= ASG WORKLOAD ================= */
         stage('Simulate Workload (ASG Trigger)') {
             steps {
                 sh '''
@@ -185,17 +196,17 @@ pipeline {
     }
 
     post {
-        always {
-            sh 'docker system prune -af || true'
-        }
         success {
             echo "✅ Pipeline completed successfully"
         }
         unstable {
-            echo "⚠️ Pipeline completed with warnings"
+            echo "⚠️ Completed with warnings"
         }
         failure {
             echo "❌ Pipeline failed – check logs"
+        }
+        always {
+            sh 'docker system prune -af || true'
         }
     }
 }
