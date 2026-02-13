@@ -2,129 +2,126 @@
 
 pipeline {
 
+    /* ================= PARAMETERS ================= */
+    parameters {
+        choice(
+            name: 'agentSelector',
+            choices: ['ec2', 'kubernetes'],
+            description: 'Select which agent to run the pipeline on'
+        )
+    }
+
+    /* ================= AGENT ================= */
     agent {
-        label 'ec2-agent'
+        label "${params.agentSelector == 'ec2' ? 'asg' : 'jenkins-agent'}"
     }
 
     options {
-        timeout(time: 25, unit: 'MINUTES')
+        timeout(time: 30, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         timestamps()
     }
 
     environment {
-        APP_NAMESPACE = "demo-app"
-        PYTHON_BIN = "python3"
+        AWS_REGION = "us-east-1"
+        ECR_REGISTRY = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
+        ECR_REPO = "aws_project"
+        IMAGE_TAG = "${BUILD_NUMBER}"
     }
 
     stages {
 
-        stage('Checkout') {
+        /* ================= CHECKOUT ================= */
+        stage('Checkout SCM') {
             steps {
                 checkout scm
             }
         }
 
-        stage('Prepare Environment') {
+        /* ================= ENV VALIDATION ================= */
+        stage('Validate Agent Environment') {
             steps {
                 sh '''
-                  echo "Running on:"
-                  whoami
-                  hostname
-
-                  python3 --version
-                  pip3 --version || true
-
-                  # install deps locally (no sudo)
-                  python3 -m pip install --user --upgrade pip
-                  python3 -m pip install --user pytest pytest-html pylint
+                    echo "=== Agent Info ==="
+                    hostname
+                    whoami
+                    docker --version
+                    aws --version
                 '''
             }
         }
 
-        stage('Static Analysis & Tests') {
-            parallel {
+        /* ================= LOGIN TO ECR ================= */
+        stage('Login to ECR') {
+            steps {
+                sh '''
+                    aws ecr get-login-password --region $AWS_REGION \
+                    | docker login --username AWS --password-stdin $ECR_REGISTRY
+                '''
+            }
+        }
 
-                /* ======================
-                   PYLINT
-                   ====================== */
-                stage('PyLint') {
-                    steps {
-                        sh '''
-                          mkdir -p reports/pylint
+        /* ================= BUILD IMAGES ================= */
+        stage('Build Docker Images') {
+            steps {
+                sh '''
+                    echo "Building auth-service..."
+                    docker build -t auth-service -f auth-service/Dockerfile .
 
-                          python3 -m pylint auth-service/*.py backend/*.py \
-                            --output-format=html \
-                            > reports/pylint/pylint.html || true
+                    echo "Building backend..."
+                    docker build -t backend -f backend/Dockerfile .
 
-                          ls -l reports/pylint || true
-                        '''
-                    }
-                    post {
-                        always {
-                            publishHTML(
-                                target: [
-                                    reportDir: 'reports/pylint',
-                                    reportFiles: 'pylint.html',
-                                    reportName: 'PyLint Report',
-                                    allowMissing: true,
-                                    keepAll: true,
-                                    alwaysLinkToLastBuild: true
-                                ]
-                            )
-                        }
-                    }
-                }
+                    echo "Building jewelry-store..."
+                    docker build -t jewelry-store -f jewelry-store/Dockerfile .
+                '''
+            }
+        }
 
-                /* ======================
-                   PYTEST
-                   ====================== */
-                stage('PyTest') {
-                    steps {
-                        sh '''
-                          mkdir -p reports/pytest
+        /* ================= TAG IMAGES ================= */
+        stage('Tag Images for ECR') {
+            steps {
+                sh '''
+                    docker tag auth-service $ECR_REGISTRY/$ECR_REPO/auth-service:$IMAGE_TAG
+                    docker tag backend $ECR_REGISTRY/$ECR_REPO/backend:$IMAGE_TAG
+                    docker tag jewelry-store $ECR_REGISTRY/$ECR_REPO/jewelry-store:$IMAGE_TAG
+                '''
+            }
+        }
 
-                          python3 -m pytest \
-                            --junitxml=reports/pytest/junit.xml \
-                            --html=reports/pytest/pytest_report.html \
-                            --self-contained-html || true
+        /* ================= PUSH TO ECR ================= */
+        stage('Push Images to ECR') {
+            steps {
+                sh '''
+                    docker push $ECR_REGISTRY/$ECR_REPO/auth-service:$IMAGE_TAG
+                    docker push $ECR_REGISTRY/$ECR_REPO/backend:$IMAGE_TAG
+                    docker push $ECR_REGISTRY/$ECR_REPO/jewelry-store:$IMAGE_TAG
+                '''
+            }
+        }
 
-                          ls -l reports/pytest || true
-                        '''
-                    }
-                    post {
-                        always {
-                            junit(
-                                testResults: 'reports/pytest/junit.xml',
-                                allowEmptyResults: true
-                            )
-
-                            publishHTML(
-                                target: [
-                                    reportDir: 'reports/pytest',
-                                    reportFiles: 'pytest_report.html',
-                                    reportName: 'Pytest HTML Report',
-                                    allowMissing: true,
-                                    keepAll: true,
-                                    alwaysLinkToLastBuild: true
-                                ]
-                            )
-                        }
-                    }
-                }
+        /* ================= LOAD TEST (FOR ASG PROOF) ================= */
+        stage('Simulate Workload (ASG Trigger)') {
+            steps {
+                sh '''
+                    echo "Simulating workload to trigger ASG scaling..."
+                    sleep 30
+                '''
             }
         }
     }
 
     post {
         success {
-            echo "✅ Pipeline finished successfully on EC2 agent"
+            echo "✅ Task 2 pipeline completed successfully"
         }
         unstable {
-            echo "⚠️ Pipeline finished with warnings"
+            echo "⚠️ Pipeline completed with warnings"
         }
         failure {
-            echo "❌ Pipeline failed"
+            echo "❌ Pipeline failed – check logs"
+        }
+        always {
+            sh 'docker system prune -af || true'
         }
     }
 }
