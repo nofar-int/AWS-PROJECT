@@ -1,20 +1,7 @@
 @Library('jenkins-shared-library') _
 
 pipeline {
-
-    /* ================= PARAMETERS ================= */
-    parameters {
-        choice(
-            name: 'agentSelector',
-            choices: ['ec2', 'kubernetes'],
-            description: 'Select which agent to run the pipeline on'
-        )
-    }
-
-    /* ================= AGENT ================= */
-    agent {
-        label "${params.agentSelector == 'ec2' ? 'asg' : 'jenkins-agent'}"
-    }
+    agent { label 'asg' }
 
     options {
         timeout(time: 30, unit: 'MINUTES')
@@ -23,10 +10,10 @@ pipeline {
     }
 
     environment {
-        AWS_REGION = "us-east-1"
-        ECR_REGISTRY = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
-        ECR_REPO = "aws_project"
-        IMAGE_TAG = "${BUILD_NUMBER}"
+        AWS_REGION  = "us-east-1"
+        AWS_ACCOUNT = "838883895073"
+        ECR_REPO    = "aws_project"
+        IMAGE_TAG   = "${BUILD_NUMBER}"
     }
 
     stages {
@@ -38,7 +25,7 @@ pipeline {
             }
         }
 
-        /* ================= ENV VALIDATION ================= */
+        /* ================= VALIDATE AGENT ================= */
         stage('Validate Agent Environment') {
             steps {
                 sh '''
@@ -56,7 +43,8 @@ pipeline {
             steps {
                 sh '''
                     aws ecr get-login-password --region $AWS_REGION \
-                    | docker login --username AWS --password-stdin $ECR_REGISTRY
+                    | docker login --username AWS --password-stdin \
+                    $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
                 '''
             }
         }
@@ -66,24 +54,32 @@ pipeline {
             steps {
                 sh '''
                     echo "Building auth-service..."
-                    docker build -t auth-service -f auth-service/Dockerfile .
+                    docker build -t auth-service:$IMAGE_TAG \
+                        -f infra/Dockerfile.auth .
 
                     echo "Building backend..."
-                    docker build -t backend -f backend/Dockerfile .
+                    docker build -t backend:$IMAGE_TAG \
+                        -f infra/Dockerfile.backend .
 
                     echo "Building jewelry-store..."
-                    docker build -t jewelry-store -f jewelry-store/Dockerfile .
+                    docker build -t jewelry-store:$IMAGE_TAG \
+                        -f infra/Dockerfile.frontend .
                 '''
             }
         }
 
-        /* ================= TAG IMAGES ================= */
+        /* ================= TAG FOR ECR ================= */
         stage('Tag Images for ECR') {
             steps {
                 sh '''
-                    docker tag auth-service $ECR_REGISTRY/$ECR_REPO/auth-service:$IMAGE_TAG
-                    docker tag backend $ECR_REGISTRY/$ECR_REPO/backend:$IMAGE_TAG
-                    docker tag jewelry-store $ECR_REGISTRY/$ECR_REPO/jewelry-store:$IMAGE_TAG
+                    docker tag auth-service:$IMAGE_TAG \
+                        $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:auth-$IMAGE_TAG
+
+                    docker tag backend:$IMAGE_TAG \
+                        $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:backend-$IMAGE_TAG
+
+                    docker tag jewelry-store:$IMAGE_TAG \
+                        $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:frontend-$IMAGE_TAG
                 '''
             }
         }
@@ -92,19 +88,19 @@ pipeline {
         stage('Push Images to ECR') {
             steps {
                 sh '''
-                    docker push $ECR_REGISTRY/$ECR_REPO/auth-service:$IMAGE_TAG
-                    docker push $ECR_REGISTRY/$ECR_REPO/backend:$IMAGE_TAG
-                    docker push $ECR_REGISTRY/$ECR_REPO/jewelry-store:$IMAGE_TAG
+                    docker push $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:auth-$IMAGE_TAG
+                    docker push $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:backend-$IMAGE_TAG
+                    docker push $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:frontend-$IMAGE_TAG
                 '''
             }
         }
 
-        /* ================= LOAD TEST (FOR ASG PROOF) ================= */
+        /* ================= SIMULATE LOAD (ASG TEST) ================= */
         stage('Simulate Workload (ASG Trigger)') {
             steps {
                 sh '''
-                    echo "Simulating workload to trigger ASG scaling..."
-                    sleep 30
+                    echo "Simulating workload to verify ASG agent..."
+                    sleep 10
                 '''
             }
         }
@@ -112,14 +108,13 @@ pipeline {
 
     post {
         success {
-            echo "✅ Task 2 pipeline completed successfully"
+            echo "✅ Images built and pushed to ECR successfully"
         }
-        unstable {
-            echo "⚠️ Pipeline completed with warnings"
-        }
+
         failure {
             echo "❌ Pipeline failed – check logs"
         }
+
         always {
             sh 'docker system prune -af || true'
         }
