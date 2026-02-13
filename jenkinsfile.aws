@@ -1,122 +1,310 @@
 @Library('jenkins-shared-library') _
 
 pipeline {
-    agent { label 'asg' }
+  agent none
 
-    options {
-        timeout(time: 30, unit: 'MINUTES')
-        buildDiscarder(logRotator(numToKeepStr: '10'))
-        timestamps()
-    }
+  options {
+    timeout(time: 30, unit: 'MINUTES')
+    buildDiscarder(logRotator(numToKeepStr: '10'))
+    timestamps()
+  }
 
-    environment {
-        AWS_REGION  = "us-east-1"
-        AWS_ACCOUNT = "838883895073"
-        ECR_REPO    = "aws_project"
-        IMAGE_TAG   = "${BUILD_NUMBER}"
-    }
+  parameters {
+    choice(
+      name: 'AGENT_TYPE',
+      choices: ['ec2', 'kubernetes'],
+      description: "Where to run the pipeline: ec2 (ASG agent) or kubernetes (pods)."
+    )
+    booleanParam(
+      name: 'RUN_SNYK',
+      defaultValue: true,
+      description: 'Run Snyk scans (requires SNYK_TOKEN credential).'
+    )
+  }
 
-    stages {
+  environment {
+    AWS_REGION   = 'us-east-1'
+    AWS_ACCOUNT  = '838883895073'
+    ECR_REGISTRY = "${AWS_ACCOUNT}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+    ECR_REPO     = "aws_project"   // הריפו שלך ב-ECR
 
-        /* ================= CHECKOUT ================= */
+    // Reports
+    REPORTS_DIR = "reports"
+  }
+
+  stages {
+
+    /* ================= RUN ON EC2 ================= */
+    stage('EC2 Flow') {
+      when { expression { params.AGENT_TYPE == 'ec2' } }
+      agent { label 'asg' }   // 👈 תוודאי שלנוד asg-agent יש Label: asg
+
+      environment {
+        // Jenkins Credentials (Secret Text) בשם SNYK_TOKEN
+        SNYK_TOKEN = credentials('SNYK_TOKEN')
+      }
+
+      stages {
+
         stage('Checkout SCM') {
-            steps {
-                checkout scm
-            }
+          steps {
+            checkout scm
+          }
         }
 
-        /* ================= VALIDATE AGENT ================= */
-        stage('Validate Agent Environment') {
-            steps {
-                sh '''
-                    echo "=== Agent Info ==="
-                    hostname
-                    whoami
-                    docker --version
-                    aws --version
-                '''
-            }
+        stage('Prepare Environment') {
+          steps {
+            sh '''
+              set -euxo pipefail
+              echo "=== Agent Info ==="
+              whoami
+              hostname
+              git --version
+              python3 --version || true
+              pip3 --version || true
+              node --version || true
+              npm --version || true
+              docker --version
+              aws --version
+
+              echo "=== Disk ==="
+              df -h
+              echo "=== Temp ==="
+              df -h /tmp || true
+            '''
+          }
         }
 
-        /* ================= LOGIN TO ECR ================= */
+        stage('Setup Python Tools') {
+          steps {
+            sh '''
+              set -euxo pipefail
+              python3 -m venv .venv
+              . .venv/bin/activate
+              pip install -U pip
+
+              # התקנות לכלי בדיקה (כדי להבטיח שיש pytest-html/pylint)
+              pip install pytest pytest-html pylint
+
+              # התקנת requirements של הפרויקטים (אם קיימים)
+              if [ -f auth-service/requirements.txt ]; then pip install -r auth-service/requirements.txt; fi
+              if [ -f backend/requirements.txt ]; then pip install -r backend/requirements.txt; fi
+
+              mkdir -p ${REPORTS_DIR}/pylint ${REPORTS_DIR}/pytest ${REPORTS_DIR}/snyk
+            '''
+          }
+        }
+
+        stage('Static Analysis (Parallel)') {
+          parallel {
+
+            stage('Pylint Analysis') {
+              steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                  sh '''
+                    set -euxo pipefail
+                    . .venv/bin/activate
+
+                    # אם הנתיבים שונים אצלך - עדכני פה
+                    pylint auth-service/*.py backend/*.py jewelry-store/*.py \
+                      --output-format=text \
+                      | tee ${REPORTS_DIR}/pylint/pylint_report.txt || true
+                  '''
+                }
+              }
+            }
+
+            stage('Unit Tests (Pytest HTML)') {
+              steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                  sh '''
+                    set -euxo pipefail
+                    . .venv/bin/activate
+
+                    pytest -q \
+                      --html=${REPORTS_DIR}/pytest/unit_test_report.html \
+                      --self-contained-html || true
+                  '''
+                }
+              }
+            }
+
+            stage('Snyk Scan (Docker Images)') {
+              when { expression { return params.RUN_SNYK } }
+              steps {
+                catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                  sh '''
+                    set -euxo pipefail
+
+                    # נריץ Snyk דרך Docker כדי לא להתקין CLI על המכונה
+                    # נבנה קודם images מקומית ואז נסרוק אותם
+
+                    echo "Building local images for Snyk scan..."
+                    docker build -t local-auth:scan   -f infra/Dockerfile.auth   .
+                    docker build -t local-backend:scan -f infra/Dockerfile.backend .
+                    docker build -t local-ui:scan     -f infra/Dockerfile.jewelry-store .
+
+                    echo "Running Snyk container tests..."
+                    docker run --rm \
+                      -e SNYK_TOKEN="${SNYK_TOKEN}" \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      snyk/snyk-cli:docker \
+                      snyk container test local-auth:scan --file=infra/Dockerfile.auth \
+                      | tee ${REPORTS_DIR}/snyk/snyk_auth.txt || true
+
+                    docker run --rm \
+                      -e SNYK_TOKEN="${SNYK_TOKEN}" \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      snyk/snyk-cli:docker \
+                      snyk container test local-backend:scan --file=infra/Dockerfile.backend \
+                      | tee ${REPORTS_DIR}/snyk/snyk_backend.txt || true
+
+                    docker run --rm \
+                      -e SNYK_TOKEN="${SNYK_TOKEN}" \
+                      -v /var/run/docker.sock:/var/run/docker.sock \
+                      snyk/snyk-cli:docker \
+                      snyk container test local-ui:scan --file=infra/Dockerfile.jewelry-store \
+                      | tee ${REPORTS_DIR}/snyk/snyk_ui.txt || true
+                  '''
+                }
+              }
+            }
+          }
+        }
+
+        stage('Publish HTML Reports') {
+          steps {
+            // pytest html
+            publishHTML([
+              allowMissing: true,
+              alwaysLinkToLastBuild: true,
+              keepAll: true,
+              reportDir: "${REPORTS_DIR}/pytest",
+              reportFiles: "unit_test_report.html",
+              reportName: "Unit Test Report"
+            ])
+
+            // pylint text report - נציג אותו כ-HTML דרך wrapper קטן
+            sh '''
+              set -euxo pipefail
+              mkdir -p ${REPORTS_DIR}/pylint
+              if [ -f ${REPORTS_DIR}/pylint/pylint_report.txt ]; then
+                cat > ${REPORTS_DIR}/pylint/index.html <<'EOF'
+                <html><body><h2>Pylint Report</h2><pre>
+EOF
+                sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g' ${REPORTS_DIR}/pylint/pylint_report.txt >> ${REPORTS_DIR}/pylint/index.html
+                cat >> ${REPORTS_DIR}/pylint/index.html <<'EOF'
+                </pre></body></html>
+EOF
+              fi
+            '''
+            publishHTML([
+              allowMissing: true,
+              alwaysLinkToLastBuild: true,
+              keepAll: true,
+              reportDir: "${REPORTS_DIR}/pylint",
+              reportFiles: "index.html",
+              reportName: "Pylint Report"
+            ])
+          }
+        }
+
         stage('Login to ECR') {
-            steps {
-                sh '''
-                    aws ecr get-login-password --region $AWS_REGION \
-                    | docker login --username AWS --password-stdin \
-                    $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com
-                '''
-            }
+          steps {
+            sh '''
+              set -euxo pipefail
+              aws ecr get-login-password --region ${AWS_REGION} \
+                | docker login --username AWS --password-stdin ${ECR_REGISTRY}
+            '''
+          }
         }
 
-        /* ================= BUILD IMAGES ================= */
         stage('Build Docker Images') {
-            steps {
-                sh '''
-                    echo "Building auth-service..."
-                    docker build -t auth-service:$IMAGE_TAG \
-                        -f infra/Dockerfile.auth .
+          steps {
+            sh '''
+              set -euxo pipefail
 
-                    echo "Building backend..."
-                    docker build -t backend:$IMAGE_TAG \
-                        -f infra/Dockerfile.backend .
-
-                    echo "Building jewelry-store..."
-                    docker build -t jewelry-store:$IMAGE_TAG \
-                        -f infra/Dockerfile.frontend .
-                '''
-            }
+              # ✅ עדכני פה אם שמות הדוקרפיילים שונים
+              docker build -t auth-service:ci    -f infra/Dockerfile.auth .
+              docker build -t backend:ci         -f infra/Dockerfile.backend .
+              docker build -t jewelry-store:ci   -f infra/Dockerfile.jewelry-store .
+            '''
+          }
         }
 
-        /* ================= TAG FOR ECR ================= */
         stage('Tag Images for ECR') {
-            steps {
-                sh '''
-                    docker tag auth-service:$IMAGE_TAG \
-                        $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:auth-$IMAGE_TAG
+          steps {
+            sh '''
+              set -euxo pipefail
 
-                    docker tag backend:$IMAGE_TAG \
-                        $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:backend-$IMAGE_TAG
+              AUTH_TAG="${ECR_REGISTRY}/${ECR_REPO}:auth-${BUILD_NUMBER}"
+              BACK_TAG="${ECR_REGISTRY}/${ECR_REPO}:backend-${BUILD_NUMBER}"
+              UI_TAG="${ECR_REGISTRY}/${ECR_REPO}:ui-${BUILD_NUMBER}"
 
-                    docker tag jewelry-store:$IMAGE_TAG \
-                        $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:frontend-$IMAGE_TAG
-                '''
-            }
+              docker tag auth-service:ci  "$AUTH_TAG"
+              docker tag backend:ci       "$BACK_TAG"
+              docker tag jewelry-store:ci "$UI_TAG"
+
+              echo "$AUTH_TAG" > ${REPORTS_DIR}/ecr_auth_tag.txt
+              echo "$BACK_TAG" > ${REPORTS_DIR}/ecr_backend_tag.txt
+              echo "$UI_TAG"   > ${REPORTS_DIR}/ecr_ui_tag.txt
+            '''
+          }
         }
 
-        /* ================= PUSH TO ECR ================= */
         stage('Push Images to ECR') {
-            steps {
-                sh '''
-                    docker push $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:auth-$IMAGE_TAG
-                    docker push $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:backend-$IMAGE_TAG
-                    docker push $AWS_ACCOUNT.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPO:frontend-$IMAGE_TAG
-                '''
-            }
+          steps {
+            sh '''
+              set -euxo pipefail
+
+              docker push "${ECR_REGISTRY}/${ECR_REPO}:auth-${BUILD_NUMBER}"
+              docker push "${ECR_REGISTRY}/${ECR_REPO}:backend-${BUILD_NUMBER}"
+              docker push "${ECR_REGISTRY}/${ECR_REPO}:ui-${BUILD_NUMBER}"
+
+              echo "✅ Pushed images to ECR repo: ${ECR_REPO}"
+            '''
+          }
         }
 
-        /* ================= SIMULATE LOAD (ASG TEST) ================= */
         stage('Simulate Workload (ASG Trigger)') {
-            steps {
-                sh '''
-                    echo "Simulating workload to verify ASG agent..."
-                    sleep 10
-                '''
-            }
+          steps {
+            sh '''
+              set -euxo pipefail
+              echo "Simulating workload so ASG behavior is visible..."
+              sleep 10
+              echo "Done."
+            '''
+          }
         }
-    }
+      }
 
-    post {
-        success {
-            echo "✅ Images built and pushed to ECR successfully"
-        }
-
-        failure {
-            echo "❌ Pipeline failed – check logs"
-        }
-
+      post {
         always {
-            sh 'docker system prune -af || true'
+          sh '''
+            set +e
+            echo "Cleanup docker..."
+            docker system prune -af || true
+          '''
         }
+        success {
+          echo "✅ EC2/ASG Pipeline completed successfully"
+        }
+        unstable {
+          echo "⚠️ Completed with warnings (lint/tests/snyk)"
+        }
+        failure {
+          echo "❌ Pipeline failed – check logs"
+        }
+      }
     }
+
+    /* ================= RUN ON K8S (FUTURE) ================= */
+    stage('Kubernetes Flow (future)') {
+      when { expression { params.AGENT_TYPE == 'kubernetes' } }
+      // כאן בעתיד נחזיר את ה-agent kubernetes שלך
+      steps {
+        echo "Kubernetes flow is not enabled yet. Switch AGENT_TYPE=ec2 for now."
+      }
+    }
+  }
 }
