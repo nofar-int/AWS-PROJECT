@@ -2,20 +2,9 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# העתקת package.json ו-package-lock.json מתוך תיקיית jewelry-store
-COPY ../jewelry-store/package*.json ./
+COPY jewelry-store/package*.json ./
 RUN npm install
 
-# העתקת כל תוכן תיקיית jewelry-store
-COPY ../jewelry-store/ .
+COPY jewelry-store/ .
 
-# מאזין לכל ה־IPs ולא רק localhost
 CMD ["npm", "start", "--", "--host", "0.0.0.0"]
-
-
-
-
-
-
-
-
