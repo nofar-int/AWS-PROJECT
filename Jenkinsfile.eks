@@ -1,4 +1,5 @@
 @Library('jenkins-shared-library') _
+
 pipeline {
     agent {
         kubernetes {
@@ -12,26 +13,22 @@ spec:
   containers:
     - name: tools
       image: alpine/k8s:1.33.0
-      command:
-        - cat
+      command: ['cat']
       tty: true
 
     - name: python
       image: python:3.11-slim
-      command:
-        - cat
+      command: ['cat']
       tty: true
 
     - name: node
       image: node:20
-      command:
-        - cat
+      command: ['cat']
       tty: true
 
     - name: kaniko
       image: gcr.io/kaniko-project/executor:debug
-      command:
-        - /busybox/cat
+      command: ['/busybox/cat']
       tty: true
       volumeMounts:
         - name: kaniko-cache
@@ -47,16 +44,15 @@ spec:
     options {
         timeout(time: 30, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
-        timestamps()
         disableResume()
     }
 
     environment {
-        AWS_REGION   = "us-east-1"
-        ECR_REGISTRY = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
-        ECR_REPO     = "aws_project"
+        AWS_REGION    = "us-east-1"
+        ECR_REGISTRY  = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
+        ECR_REPO      = "aws_project"
         APP_NAMESPACE = "nofar-app"
-        IMAGE_TAG    = "${BUILD_NUMBER}"
+        IMAGE_TAG     = "${BUILD_NUMBER}"
     }
 
     stages {
@@ -111,13 +107,19 @@ spec:
         stage('Snyk Scan') {
             steps {
                 container('node') {
-                    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
-                        sh '''
-                            echo "Installing Snyk locally..."
-                            npm install snyk --no-save || true
-                            echo "Skipping hard failure for demo environment"
-                            npx snyk test || true
-                        '''
+                    withCredentials([string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')]) {
+                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                            sh '''
+                                echo "Installing Snyk locally..."
+                                npm install snyk --no-save || true
+
+                                echo "Authenticating Snyk..."
+                                npx snyk auth ${SNYK_TOKEN} || true
+
+                                echo "Running Snyk test..."
+                                npx snyk test || true
+                            '''
+                        }
                     }
                 }
             }
@@ -126,13 +128,23 @@ spec:
         stage('Build & Push Auth Image to ECR') {
             steps {
                 container('kaniko') {
-                    sh '''
-                        /kaniko/executor \
-                          --context ${WORKSPACE} \
-                          --dockerfile ${WORKSPACE}/infra/Dockerfile.auth \
-                          --destination ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG} \
-                          --cache=true
-                    '''
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        sh '''
+                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                            export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                            /kaniko/executor \
+                              --context ${WORKSPACE} \
+                              --dockerfile ${WORKSPACE}/infra/Dockerfile.auth \
+                              --destination ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG} \
+                              --cache=true
+                        '''
+                    }
                 }
             }
         }
@@ -140,13 +152,23 @@ spec:
         stage('Build & Push Backend Image to ECR') {
             steps {
                 container('kaniko') {
-                    sh '''
-                        /kaniko/executor \
-                          --context ${WORKSPACE} \
-                          --dockerfile ${WORKSPACE}/infra/Dockerfile.backend \
-                          --destination ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG} \
-                          --cache=true
-                    '''
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        sh '''
+                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                            export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                            /kaniko/executor \
+                              --context ${WORKSPACE} \
+                              --dockerfile ${WORKSPACE}/infra/Dockerfile.backend \
+                              --destination ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG} \
+                              --cache=true
+                        '''
+                    }
                 }
             }
         }
@@ -154,13 +176,23 @@ spec:
         stage('Build & Push Frontend Image to ECR') {
             steps {
                 container('kaniko') {
-                    sh '''
-                        /kaniko/executor \
-                          --context ${WORKSPACE} \
-                          --dockerfile ${WORKSPACE}/infra/Dockerfile.frontend \
-                          --destination ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG} \
-                          --cache=true
-                    '''
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
+                        sh '''
+                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+                            export AWS_DEFAULT_REGION=${AWS_REGION}
+
+                            /kaniko/executor \
+                              --context ${WORKSPACE} \
+                              --dockerfile ${WORKSPACE}/infra/Dockerfile.frontend \
+                              --destination ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG} \
+                              --cache=true
+                        '''
+                    }
                 }
             }
         }
