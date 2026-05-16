@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend-deployment
-  namespace: demo-app
+  namespace: nofar-app
 spec:
   replicas: 1
   selector:
@@ -15,33 +15,14 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: nofarpanker/luxe-jewelry-store-front:latest
+          image: 838883895073.dkr.ecr.us-east-1.amazonaws.com/aws_project:frontend-8
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
-          readinessProbe:
-            httpGet:
-              path: /
-              port: 3000
-            initialDelaySeconds: 5
-            periodSeconds: 5
-          livenessProbe:
-            httpGet:
-              path: /
-              port: 3000
-            initialDelaySeconds: 10
-            periodSeconds: 10
           resources:
             requests:
-              cpu: 500m
-              memory: 1024Mi
+              cpu: "100m"
+              memory: "128Mi"
             limits:
-              cpu: 1000m
-              memory: 2048Mi
-
-
-
-
-
-
-
+              cpu: "300m"
+              memory: "256Mi"

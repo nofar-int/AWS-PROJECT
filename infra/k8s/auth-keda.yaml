@@ -2,7 +2,7 @@ apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: auth-scaledobject
-  namespace: demo-app
+  namespace: nofar-app
 spec:
   scaleTargetRef:
     name: auth-deployment

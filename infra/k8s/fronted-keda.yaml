@@ -2,7 +2,7 @@ apiVersion: keda.sh/v1alpha1
 kind: ScaledObject
 metadata:
   name: frontend-scaledobject
-  namespace: demo-app
+  namespace: nofar-app
 spec:
   scaleTargetRef:
     name: frontend-deployment

@@ -1,0 +1,31 @@
+controller:
+  serviceType: ClusterIP
+
+  admin:
+    username: admin
+    password: Admin123456!
+
+  installPlugins: []
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "512Mi"
+    limits:
+      cpu: "500m"
+      memory: "1Gi"
+
+  serviceAccount:
+    create: true
+    name: jenkins
+
+  ingress:
+    enabled: false
+
+persistence:
+  enabled: true
+  storageClass: gp2
+  size: "10Gi"
+
+agent:
+  enabled: true

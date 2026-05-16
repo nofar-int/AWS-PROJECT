@@ -1,14 +1,14 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: demo-app-ingress
-  namespace: demo-app
+  name: nofar-app-ingress
+  namespace: nofar-app
   annotations:
     kubernetes.io/ingress.class: "nginx"
 spec:
   ingressClassName: nginx
   rules:
-    - host: demo-app.local
+    - host: nofar-app.local
       http:
         paths:
           - path: /auth
