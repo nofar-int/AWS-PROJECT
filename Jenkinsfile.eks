@@ -30,19 +30,19 @@ spec:
       image: gcr.io/kaniko-project/executor:debug
       command: ['/busybox/cat']
       tty: true
-      volumeMounts:
-        - name: kaniko-cache
-          mountPath: /cache
-
-  volumes:
-    - name: kaniko-cache
-      emptyDir: {}
+      resources:
+        requests:
+          memory: "768Mi"
+          cpu: "200m"
+        limits:
+          memory: "1500Mi"
+          cpu: "700m"
 """
         }
     }
 
     options {
-        timeout(time: 30, unit: 'MINUTES')
+        timeout(time: 45, unit: 'MINUTES')
         buildDiscarder(logRotator(numToKeepStr: '10'))
         disableResume()
     }
@@ -109,6 +109,7 @@ spec:
                     withCredentials([string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')]) {
                         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
                             sh '''
+                                cd jewelry-store
                                 npm install snyk --no-save || true
                                 npx snyk auth ${SNYK_TOKEN} || true
                                 npx snyk test || true
@@ -132,7 +133,7 @@ spec:
                               --context ${WORKSPACE} \
                               --dockerfile ${WORKSPACE}/infra/Dockerfile.auth \
                               --destination ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG} \
-                              --cache=true
+                              --cache=false
                         '''
                     }
                 }
@@ -152,7 +153,7 @@ spec:
                               --context ${WORKSPACE} \
                               --dockerfile ${WORKSPACE}/infra/Dockerfile.backend \
                               --destination ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG} \
-                              --cache=true
+                              --cache=false
                         '''
                     }
                 }
@@ -172,7 +173,7 @@ spec:
                               --context ${WORKSPACE} \
                               --dockerfile ${WORKSPACE}/infra/Dockerfile.frontend \
                               --destination ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG} \
-                              --cache=true
+                              --cache=false
                         '''
                     }
                 }
