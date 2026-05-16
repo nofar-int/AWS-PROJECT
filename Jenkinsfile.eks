@@ -123,7 +123,11 @@ spec:
         stage('Build & Push Auth Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
                         sh '''
                             export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -133,7 +137,8 @@ spec:
                               --context ${WORKSPACE} \
                               --dockerfile ${WORKSPACE}/infra/Dockerfile.auth \
                               --destination ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG} \
-                              --cache=false
+                              --cache=false \
+                              --cleanup
                         '''
                     }
                 }
@@ -143,7 +148,11 @@ spec:
         stage('Build & Push Backend Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
                         sh '''
                             export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -153,7 +162,8 @@ spec:
                               --context ${WORKSPACE} \
                               --dockerfile ${WORKSPACE}/infra/Dockerfile.backend \
                               --destination ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG} \
-                              --cache=false
+                              --cache=false \
+                              --cleanup
                         '''
                     }
                 }
@@ -163,7 +173,11 @@ spec:
         stage('Build & Push Frontend Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    withCredentials([usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )]) {
                         sh '''
                             export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -173,7 +187,8 @@ spec:
                               --context ${WORKSPACE} \
                               --dockerfile ${WORKSPACE}/infra/Dockerfile.frontend \
                               --destination ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG} \
-                              --cache=false
+                              --cache=false \
+                              --cleanup
                         '''
                     }
                 }
@@ -188,6 +203,7 @@ spec:
                         sed -i "s|image: .*aws_project:backend.*|image: ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG}|g" infra/k8s/backend-deployment.yaml
                         sed -i "s|image: .*aws_project:frontend.*|image: ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG}|g" infra/k8s/fronted-deployment.yaml
 
+                        echo "=== Updated image references ==="
                         grep -R "image:" infra/k8s/*.yaml
                     '''
                 }
@@ -218,28 +234,6 @@ spec:
                         kubectl rollout status deployment/frontend-deployment -n ${APP_NAMESPACE} --timeout=300s
                     '''
                 }
-            }
-        }
-
-        stage('Publish HTML Reports') {
-            steps {
-                publishHTML([
-                    allowMissing: true,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: 'reports/pylint',
-                    reportFiles: 'pylint_report.txt',
-                    reportName: 'Pylint Report'
-                ])
-
-                publishHTML([
-                    allowMissing: true,
-                    alwaysLinkToLastBuild: true,
-                    keepAll: true,
-                    reportDir: 'reports',
-                    reportFiles: 'unit_test_report.html',
-                    reportName: 'Unit Test Report'
-                ])
             }
         }
     }
