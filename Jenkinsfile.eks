@@ -213,9 +213,9 @@ spec:
                         kubectl get pods -n ${APP_NAMESPACE}
                         kubectl get deploy -n ${APP_NAMESPACE}
 
-                        kubectl rollout status deployment/auth-deployment -n ${APP_NAMESPACE} --timeout=120s
-                        kubectl rollout status deployment/backend-deployment -n ${APP_NAMESPACE} --timeout=120s
-                        kubectl rollout status deployment/frontend-deployment -n ${APP_NAMESPACE} --timeout=120s
+                        kubectl rollout status deployment/auth-deployment -n ${APP_NAMESPACE} --timeout=300s
+                        kubectl rollout status deployment/backend-deployment -n ${APP_NAMESPACE} --timeout=300s
+                        kubectl rollout status deployment/frontend-deployment -n ${APP_NAMESPACE} --timeout=300s
                     '''
                 }
             }
