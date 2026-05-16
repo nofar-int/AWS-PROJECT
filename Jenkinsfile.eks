@@ -3,7 +3,7 @@
 pipeline {
     agent {
         kubernetes {
-            label 'jenkins-agent'
+            inheritFrom 'jenkins-agent'
             defaultContainer 'tools'
             yaml """
 apiVersion: v1
@@ -56,7 +56,6 @@ spec:
     }
 
     stages {
-
         stage('Checkout SCM') {
             steps {
                 checkout scm
@@ -110,13 +109,8 @@ spec:
                     withCredentials([string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')]) {
                         catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
                             sh '''
-                                echo "Installing Snyk locally..."
                                 npm install snyk --no-save || true
-
-                                echo "Authenticating Snyk..."
                                 npx snyk auth ${SNYK_TOKEN} || true
-
-                                echo "Running Snyk test..."
                                 npx snyk test || true
                             '''
                         }
@@ -128,11 +122,7 @@ spec:
         stage('Build & Push Auth Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-ecr-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
+                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         sh '''
                             export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -152,11 +142,7 @@ spec:
         stage('Build & Push Backend Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-ecr-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
+                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         sh '''
                             export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
@@ -176,11 +162,7 @@ spec:
         stage('Build & Push Frontend Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-ecr-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
+                    withCredentials([usernamePassword(credentialsId: 'aws-ecr-creds', usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
                         sh '''
                             export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
                             export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
