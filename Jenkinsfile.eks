@@ -5,11 +5,13 @@ pipeline {
         kubernetes {
             inheritFrom 'jenkins-agent'
             defaultContainer 'tools'
+
             yaml """
 apiVersion: v1
 kind: Pod
 spec:
   serviceAccountName: jenkins
+
   containers:
     - name: tools
       image: alpine/k8s:1.33.0
@@ -24,6 +26,11 @@ spec:
     - name: node
       image: node:20
       command: ['cat']
+      tty: true
+
+    - name: aws-cli
+      image: amazon/aws-cli:latest
+      command: ['sh', '-c', 'cat']
       tty: true
 
     - name: kaniko
@@ -48,14 +55,19 @@ spec:
     }
 
     environment {
-        AWS_REGION    = "us-east-1"
-        ECR_REGISTRY  = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
-        ECR_REPO      = "aws_project"
+        AWS_REGION = "us-east-1"
+
+        ECR_REGISTRY = "838883895073.dkr.ecr.us-east-1.amazonaws.com"
+        ECR_REPO = "aws_project"
+
         APP_NAMESPACE = "nofar-app"
-        IMAGE_TAG     = "${BUILD_NUMBER}"
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:838883895073:nofar-eks-pipeline-notifications"
     }
 
     stages {
+
         stage('Checkout SCM') {
             steps {
                 checkout scm
@@ -78,11 +90,19 @@ spec:
         stage('Static Analysis - Pylint') {
             steps {
                 container('python') {
-                    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    catchError(
+                        buildResult: 'SUCCESS',
+                        stageResult: 'UNSTABLE'
+                    ) {
                         sh '''
                             mkdir -p reports/pylint
+
                             pip install pylint
-                            pylint auth-service/*.py backend/*.py > reports/pylint/pylint_report.txt || true
+
+                            pylint \
+                              auth-service/*.py \
+                              backend/*.py \
+                              > reports/pylint/pylint_report.txt || true
                         '''
                     }
                 }
@@ -92,11 +112,18 @@ spec:
         stage('Unit Tests') {
             steps {
                 container('python') {
-                    catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    catchError(
+                        buildResult: 'SUCCESS',
+                        stageResult: 'UNSTABLE'
+                    ) {
                         sh '''
                             mkdir -p reports
+
                             pip install pytest pytest-html
-                            pytest --html=reports/unit_test_report.html --self-contained-html || true
+
+                            pytest \
+                              --html=reports/unit_test_report.html \
+                              --self-contained-html || true
                         '''
                     }
                 }
@@ -106,12 +133,23 @@ spec:
         stage('Snyk Scan') {
             steps {
                 container('node') {
-                    withCredentials([string(credentialsId: 'SNYK_TOKEN', variable: 'SNYK_TOKEN')]) {
-                        catchError(buildResult: 'SUCCESS', stageResult: 'UNSTABLE') {
+                    withCredentials([
+                        string(
+                            credentialsId: 'SNYK_TOKEN',
+                            variable: 'SNYK_TOKEN'
+                        )
+                    ]) {
+                        catchError(
+                            buildResult: 'SUCCESS',
+                            stageResult: 'UNSTABLE'
+                        ) {
                             sh '''
                                 cd jewelry-store
+
                                 npm install snyk --no-save || true
-                                npx snyk auth ${SNYK_TOKEN} || true
+
+                                npx snyk auth "${SNYK_TOKEN}" || true
+
                                 npx snyk test || true
                             '''
                         }
@@ -123,20 +161,22 @@ spec:
         stage('Build & Push Auth Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-ecr-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'aws-ecr-creds',
+                            usernameVariable: 'AWS_ACCESS_KEY_ID',
+                            passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                        )
+                    ]) {
                         sh '''
-                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                            export AWS_DEFAULT_REGION=${AWS_REGION}
+                            export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                            export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                            export AWS_DEFAULT_REGION="${AWS_REGION}"
 
                             /kaniko/executor \
-                              --context ${WORKSPACE} \
-                              --dockerfile ${WORKSPACE}/infra/Dockerfile.auth \
-                              --destination ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG} \
+                              --context "${WORKSPACE}" \
+                              --dockerfile "${WORKSPACE}/infra/Dockerfile.auth" \
+                              --destination "${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG}" \
                               --cache=false \
                               --cleanup
                         '''
@@ -148,20 +188,22 @@ spec:
         stage('Build & Push Backend Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-ecr-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'aws-ecr-creds',
+                            usernameVariable: 'AWS_ACCESS_KEY_ID',
+                            passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                        )
+                    ]) {
                         sh '''
-                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                            export AWS_DEFAULT_REGION=${AWS_REGION}
+                            export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                            export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                            export AWS_DEFAULT_REGION="${AWS_REGION}"
 
                             /kaniko/executor \
-                              --context ${WORKSPACE} \
-                              --dockerfile ${WORKSPACE}/infra/Dockerfile.backend \
-                              --destination ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG} \
+                              --context "${WORKSPACE}" \
+                              --dockerfile "${WORKSPACE}/infra/Dockerfile.backend" \
+                              --destination "${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG}" \
                               --cache=false \
                               --cleanup
                         '''
@@ -173,20 +215,22 @@ spec:
         stage('Build & Push Frontend Image to ECR') {
             steps {
                 container('kaniko') {
-                    withCredentials([usernamePassword(
-                        credentialsId: 'aws-ecr-creds',
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )]) {
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'aws-ecr-creds',
+                            usernameVariable: 'AWS_ACCESS_KEY_ID',
+                            passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                        )
+                    ]) {
                         sh '''
-                            export AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
-                            export AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
-                            export AWS_DEFAULT_REGION=${AWS_REGION}
+                            export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                            export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                            export AWS_DEFAULT_REGION="${AWS_REGION}"
 
                             /kaniko/executor \
-                              --context ${WORKSPACE} \
-                              --dockerfile ${WORKSPACE}/infra/Dockerfile.frontend \
-                              --destination ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG} \
+                              --context "${WORKSPACE}" \
+                              --dockerfile "${WORKSPACE}/infra/Dockerfile.frontend" \
+                              --destination "${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG}" \
                               --cache=false \
                               --cleanup
                         '''
@@ -199,11 +243,20 @@ spec:
             steps {
                 container('tools') {
                     sh '''
-                        sed -i "s|image: .*aws_project:auth.*|image: ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG}|g" infra/k8s/auth-deployment.yaml
-                        sed -i "s|image: .*aws_project:backend.*|image: ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG}|g" infra/k8s/backend-deployment.yaml
-                        sed -i "s|image: .*aws_project:frontend.*|image: ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG}|g" infra/k8s/fronted-deployment.yaml
+                        sed -i \
+                          "s|image: .*aws_project:auth.*|image: ${ECR_REGISTRY}/${ECR_REPO}:auth-${IMAGE_TAG}|g" \
+                          infra/k8s/auth-deployment.yaml
+
+                        sed -i \
+                          "s|image: .*aws_project:backend.*|image: ${ECR_REGISTRY}/${ECR_REPO}:backend-${IMAGE_TAG}|g" \
+                          infra/k8s/backend-deployment.yaml
+
+                        sed -i \
+                          "s|image: .*aws_project:frontend.*|image: ${ECR_REGISTRY}/${ECR_REPO}:frontend-${IMAGE_TAG}|g" \
+                          infra/k8s/fronted-deployment.yaml
 
                         echo "=== Updated image references ==="
+
                         grep -R "image:" infra/k8s/*.yaml
                     '''
                 }
@@ -214,9 +267,17 @@ spec:
             steps {
                 container('tools') {
                     sh '''
-                        kubectl apply -f infra/k8s/auth-deployment.yaml -n ${APP_NAMESPACE}
-                        kubectl apply -f infra/k8s/backend-deployment.yaml -n ${APP_NAMESPACE}
-                        kubectl apply -f infra/k8s/fronted-deployment.yaml -n ${APP_NAMESPACE}
+                        kubectl apply \
+                          -f infra/k8s/auth-deployment.yaml \
+                          -n "${APP_NAMESPACE}"
+
+                        kubectl apply \
+                          -f infra/k8s/backend-deployment.yaml \
+                          -n "${APP_NAMESPACE}"
+
+                        kubectl apply \
+                          -f infra/k8s/fronted-deployment.yaml \
+                          -n "${APP_NAMESPACE}"
                     '''
                 }
             }
@@ -226,12 +287,26 @@ spec:
             steps {
                 container('tools') {
                     sh '''
-                        kubectl get pods -n ${APP_NAMESPACE}
-                        kubectl get deploy -n ${APP_NAMESPACE}
+                        kubectl get pods \
+                          -n "${APP_NAMESPACE}"
 
-                        kubectl rollout status deployment/auth-deployment -n ${APP_NAMESPACE} --timeout=300s
-                        kubectl rollout status deployment/backend-deployment -n ${APP_NAMESPACE} --timeout=300s
-                        kubectl rollout status deployment/frontend-deployment -n ${APP_NAMESPACE} --timeout=300s
+                        kubectl get deployments \
+                          -n "${APP_NAMESPACE}"
+
+                        kubectl rollout status \
+                          deployment/auth-deployment \
+                          -n "${APP_NAMESPACE}" \
+                          --timeout=300s
+
+                        kubectl rollout status \
+                          deployment/backend-deployment \
+                          -n "${APP_NAMESPACE}" \
+                          --timeout=300s
+
+                        kubectl rollout status \
+                          deployment/frontend-deployment \
+                          -n "${APP_NAMESPACE}" \
+                          --timeout=300s
                     '''
                 }
             }
@@ -239,14 +314,101 @@ spec:
     }
 
     post {
+
         success {
             echo "✅ EKS pipeline completed successfully"
+
+            container('aws-cli') {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    sh '''
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="${AWS_REGION}"
+
+                        aws sns publish \
+                          --region "${AWS_REGION}" \
+                          --topic-arn "${SNS_TOPIC_ARN}" \
+                          --subject "Jenkins EKS Pipeline Success - Build ${BUILD_NUMBER}" \
+                          --message "The Jenkins EKS pipeline completed successfully.
+
+Job: ${JOB_NAME}
+Build number: ${BUILD_NUMBER}
+Build result: SUCCESS
+EKS namespace: ${APP_NAMESPACE}
+ECR repository: ${ECR_REGISTRY}/${ECR_REPO}
+Build URL: ${BUILD_URL}"
+                    '''
+                }
+            }
         }
+
         unstable {
             echo "⚠️ Pipeline completed with warnings"
+
+            container('aws-cli') {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    sh '''
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="${AWS_REGION}"
+
+                        aws sns publish \
+                          --region "${AWS_REGION}" \
+                          --topic-arn "${SNS_TOPIC_ARN}" \
+                          --subject "Jenkins EKS Pipeline Unstable - Build ${BUILD_NUMBER}" \
+                          --message "The Jenkins EKS pipeline completed with warnings.
+
+Job: ${JOB_NAME}
+Build number: ${BUILD_NUMBER}
+Build result: UNSTABLE
+Build URL: ${BUILD_URL}"
+                    '''
+                }
+            }
         }
+
         failure {
             echo "❌ Pipeline failed – check logs"
+
+            container('aws-cli') {
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'aws-ecr-creds',
+                        usernameVariable: 'AWS_ACCESS_KEY_ID',
+                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+                    )
+                ]) {
+                    sh '''
+                        export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
+                        export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
+                        export AWS_DEFAULT_REGION="${AWS_REGION}"
+
+                        aws sns publish \
+                          --region "${AWS_REGION}" \
+                          --topic-arn "${SNS_TOPIC_ARN}" \
+                          --subject "Jenkins EKS Pipeline Failed - Build ${BUILD_NUMBER}" \
+                          --message "The Jenkins EKS pipeline failed.
+
+Job: ${JOB_NAME}
+Build number: ${BUILD_NUMBER}
+Build result: FAILURE
+Review the Jenkins console output.
+Build URL: ${BUILD_URL}"
+                    '''
+                }
+            }
         }
     }
 }
